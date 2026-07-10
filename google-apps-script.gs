@@ -64,6 +64,10 @@ function handlePost_(e) {
     return json_(getUserCampaigns_(payload));
   }
 
+  if (action === "getUserData") {
+    return json_(getUserData_(payload));
+  }
+
   if (action === "saveLead") {
     saveLead_(payload);
     return json_({ ok: true });
@@ -150,6 +154,26 @@ function getUserCampaigns_(payload) {
 
   const campaigns = getAdminCampaigns_().filter((campaign) => campaign.ownerId === account.id);
   return { ok: true, campaigns };
+}
+
+function getUserData_(payload) {
+  const account = getAccountRecord_(payload.userId, payload.email);
+  if (!account) {
+    return { ok: false, message: "Account not found." };
+  }
+  if (String(account.role).toLowerCase() === "admin") {
+    return {
+      ok: true,
+      campaigns: getAdminCampaigns_(),
+      leads: getAdminLeads_(),
+    };
+  }
+
+  const campaigns = getAdminCampaigns_().filter((campaign) => campaign.ownerId === account.id);
+  const campaignIds = {};
+  campaigns.forEach((campaign) => campaignIds[campaign.id] = true);
+  const leads = getAdminLeads_().filter((lead) => campaignIds[lead.campaignId]);
+  return { ok: true, campaigns, leads };
 }
 
 function getAccountRecord_(userId, email) {
@@ -277,6 +301,15 @@ function saveLead_(payload) {
   const sheet = getSheet_("Leads");
   ensureLeadHeader_(sheet);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idColumn = headers.indexOf("id");
+  if (payload.id && idColumn >= 0 && sheet.getLastRow() > 1) {
+    const ids = sheet.getRange(2, idColumn + 1, sheet.getLastRow() - 1, 1).getValues();
+    for (let index = 0; index < ids.length; index++) {
+      if (ids[index][0] === payload.id) {
+        return;
+      }
+    }
+  }
   const row = headers.map((header) => {
     if (header === "salesPerson") return payload.salesPerson || "";
     if (header === "notes") return payload.notes || "";

@@ -68,7 +68,7 @@ function getSettings() {
   };
 }
 
-async function syncToSheet(action, payload) {
+async function syncToSheet(action, payload, options = {}) {
   const { endpoint } = getSettings();
   if (!endpoint) return { ok: false, skipped: true };
 
@@ -76,6 +76,7 @@ async function syncToSheet(action, payload) {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
+      keepalive: Boolean(options.keepalive),
       body: JSON.stringify({ action, payload }),
     });
     const text = await response.text();
@@ -92,6 +93,39 @@ async function syncToSheet(action, payload) {
   } catch (error) {
     console.warn("Sheet sync failed", error);
     return { ok: false, message: String(error), error: String(error) };
+  }
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function syncLeadToSheet(lead) {
+  const firstAttempt = await syncToSheet("saveLead", lead, { keepalive: true });
+  if (firstAttempt.ok) return firstAttempt;
+
+  await wait(450);
+  const secondAttempt = await syncToSheet("saveLead", lead, { keepalive: true });
+  if (secondAttempt.ok) return secondAttempt;
+
+  const { endpoint } = getSettings();
+  if (!endpoint) return secondAttempt;
+
+  try {
+    await fetch(endpoint, {
+      method: "POST",
+      mode: "no-cors",
+      keepalive: true,
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "saveLead", payload: lead }),
+    });
+    return { ok: true, fallback: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: secondAttempt.message || "Lead could not be synced to Google Sheets.",
+      error: String(error),
+    };
   }
 }
 
@@ -347,6 +381,19 @@ function saveLocalCampaign(campaign) {
   }
   writeStore(STORE_KEYS.campaigns, campaigns);
   return campaigns.find((item) => item.id === campaignForStorage.id);
+}
+
+function replaceLocalUserData(campaigns, leads) {
+  const incomingCampaigns = Array.isArray(campaigns) ? campaigns : [];
+  const incomingLeads = Array.isArray(leads) ? leads : [];
+  incomingCampaigns.forEach(saveLocalCampaign);
+
+  const campaignIds = new Set(incomingCampaigns.map((campaign) => campaign.id));
+  if (!campaignIds.size) return;
+
+  const existingLeads = readStore(STORE_KEYS.leads, []);
+  const otherLeads = existingLeads.filter((lead) => !campaignIds.has(lead.campaignId));
+  writeStore(STORE_KEYS.leads, [...otherLeads, ...incomingLeads]);
 }
 
 async function getCampaignById(campaignId, options = {}) {
@@ -726,6 +773,29 @@ async function loadAccountQrData() {
     result.campaigns.forEach(saveLocalCampaign);
   }
   renderAccountQrList();
+}
+
+async function refreshRecordsFromSheet() {
+  if (!state.user) return { ok: false, message: "Create an account or log in first." };
+
+  if (isAdmin()) {
+    await loadAdminData();
+    return { ok: true };
+  }
+
+  const result = await syncToSheet("getUserData", {
+    userId: state.user.id,
+    email: state.user.email,
+  });
+  if (!result.ok) {
+    return { ok: false, message: result.message || "Records could not be loaded from Google Sheets." };
+  }
+
+  replaceLocalUserData(result.campaigns, result.leads);
+  renderAccountQrList();
+  renderLeads();
+  updateCampaignSelectors();
+  return { ok: true };
 }
 
 async function saveAdminUser(form) {
@@ -1228,9 +1298,19 @@ $("#campaignForm").addEventListener("submit", async (event) => {
 $("#leadForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const submitButton = form.querySelector("button[type=\"submit\"]");
+  if (submitButton?.disabled) return;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Saving...";
+  }
   const data = Object.fromEntries(new FormData(form));
   const campaign = await getCampaignById(data.campaignId);
   if (!campaign) {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Submit";
+    }
     toast("Campaign not found.");
     return;
   }
@@ -1252,8 +1332,21 @@ $("#leadForm").addEventListener("submit", async (event) => {
   const leads = readStore(STORE_KEYS.leads, []);
   leads.push(lead);
   writeStore(STORE_KEYS.leads, leads);
+  const syncResult = await syncLeadToSheet(lead);
+  if (!syncResult.ok) {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Submit";
+    }
+    toast(syncResult.message || "Could not save details. Please try again.");
+    return;
+  }
+
   form.reset();
-  await syncToSheet("saveLead", lead);
+  if (submitButton) {
+    submitButton.disabled = false;
+    submitButton.textContent = "Submit";
+  }
 
   if (campaign.type === "presenter" && campaign.destinationUrl) {
     toast("Details saved. Opening exhibitor link.");
@@ -1295,10 +1388,15 @@ $("#downloadCsvButton").addEventListener("click", () => {
   csvDownload(rows, campaignId);
 });
 
-$("#refreshButton").addEventListener("click", () => {
+$("#refreshButton").addEventListener("click", async () => {
   if (!requireUser()) return;
-  renderLeads();
-  toast("Lead table refreshed.");
+  const button = $("#refreshButton");
+  button.disabled = true;
+  button.textContent = "Refreshing...";
+  const result = await refreshRecordsFromSheet();
+  button.disabled = false;
+  button.textContent = "Refresh";
+  toast(result.ok ? "Records refreshed from Google Sheets." : result.message);
 });
 
 $("#adminRefreshButton").addEventListener("click", () => {
