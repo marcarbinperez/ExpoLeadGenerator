@@ -101,6 +101,18 @@ function handlePost_(e) {
     return json_(adminUpdateCampaign_(payload));
   }
 
+  if (action === "getChatConversations") {
+    return json_(getChatConversations_(payload));
+  }
+
+  if (action === "getChatMessages") {
+    return json_(getChatMessages_(payload));
+  }
+
+  if (action === "sendChatMessage") {
+    return json_(sendChatMessage_(payload));
+  }
+
   return json_({ ok: false, message: "Unsupported action." });
 }
 
@@ -295,6 +307,146 @@ function getAdminLeads_() {
     badgeNumber: row[columns.badgeNumber],
     createdAt: row[columns.createdAt],
   }));
+}
+
+function getChatConversations_(payload) {
+  if (!isAdminAccount_(payload.adminUserId, payload.adminEmail)) {
+    return { ok: false, message: "Admin access is required." };
+  }
+
+  const sheet = getSheet_("ChatMessages");
+  ensureChatHeader_(sheet);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return { ok: true, conversations: [] };
+
+  const headers = values[0];
+  const columns = chatColumns_(headers);
+  const conversations = {};
+
+  values.slice(1).forEach((row) => {
+    const userId = row[columns.conversationUserId];
+    if (!userId) return;
+    const createdAt = String(row[columns.createdAt] || "");
+    if (!conversations[userId]) {
+      conversations[userId] = {
+        userId,
+        userName: row[columns.conversationUserName],
+        userEmail: row[columns.conversationUserEmail],
+        latestMessageAt: createdAt,
+        latestSenderId: row[columns.senderId],
+        latestMessage: row[columns.message],
+      };
+      return;
+    }
+    if (createdAt >= String(conversations[userId].latestMessageAt || "")) {
+      conversations[userId].latestMessageAt = createdAt;
+      conversations[userId].latestSenderId = row[columns.senderId];
+      conversations[userId].latestMessage = row[columns.message];
+    }
+  });
+
+  getAdminAccounts_()
+    .filter((account) => String(account.role).toLowerCase() !== "admin")
+    .forEach((account) => {
+      if (conversations[account.id]) return;
+      conversations[account.id] = {
+        userId: account.id,
+        userName: account.name,
+        userEmail: account.email,
+        latestMessageAt: "",
+        latestSenderId: "",
+        latestMessage: "",
+      };
+    });
+
+  return {
+    ok: true,
+    conversations: Object.keys(conversations)
+      .map((key) => conversations[key])
+      .sort((a, b) => String(b.latestMessageAt || "").localeCompare(String(a.latestMessageAt || ""))),
+  };
+}
+
+function getChatMessages_(payload) {
+  const requester = getAccountRecord_(payload.userId, payload.email);
+  if (!requester) {
+    return { ok: false, message: "Account not found." };
+  }
+
+  const requesterIsAdmin = String(requester.role).toLowerCase() === "admin";
+  const conversationUserId = requesterIsAdmin ? payload.targetUserId : requester.id;
+  if (!conversationUserId) {
+    return { ok: true, messages: [] };
+  }
+  if (!requesterIsAdmin && conversationUserId !== requester.id) {
+    return { ok: false, message: "You can only open your own chat." };
+  }
+
+  const sheet = getSheet_("ChatMessages");
+  ensureChatHeader_(sheet);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return { ok: true, messages: [] };
+
+  const headers = values[0];
+  const columns = chatColumns_(headers);
+  const messages = values.slice(1)
+    .filter((row) => row[columns.conversationUserId] === conversationUserId)
+    .map((row) => ({
+      id: row[columns.id],
+      conversationUserId: row[columns.conversationUserId],
+      conversationUserName: row[columns.conversationUserName],
+      conversationUserEmail: row[columns.conversationUserEmail],
+      senderId: row[columns.senderId],
+      senderName: row[columns.senderName],
+      senderRole: row[columns.senderRole],
+      message: row[columns.message],
+      createdAt: row[columns.createdAt],
+    }))
+    .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+
+  return { ok: true, messages };
+}
+
+function sendChatMessage_(payload) {
+  const sender = getAccountRecord_(payload.userId, payload.email);
+  if (!sender) {
+    return { ok: false, message: "Account not found." };
+  }
+
+  const message = String(payload.message || "").trim();
+  if (!message) {
+    return { ok: false, message: "Type a message first." };
+  }
+
+  const senderIsAdmin = String(sender.role).toLowerCase() === "admin";
+  const conversationUser = senderIsAdmin
+    ? getAccountRecord_(payload.targetUserId, "")
+    : sender;
+  if (!conversationUser) {
+    return { ok: false, message: "Chat user was not found." };
+  }
+  if (String(conversationUser.role).toLowerCase() === "admin") {
+    return { ok: false, message: "Choose a non-admin user." };
+  }
+
+  const sheet = getSheet_("ChatMessages");
+  ensureChatHeader_(sheet);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const createdAt = payload.createdAt || new Date().toISOString();
+  const rowData = {
+    id: payload.id || "chat_" + new Date().getTime() + "_" + Math.floor(Math.random() * 100000),
+    conversationUserId: conversationUser.id,
+    conversationUserName: conversationUser.name,
+    conversationUserEmail: conversationUser.email,
+    senderId: sender.id,
+    senderName: sender.name,
+    senderEmail: sender.email,
+    senderRole: sender.role,
+    message,
+    createdAt,
+  };
+  sheet.appendRow(headers.map((header) => rowData[header] || ""));
+  return { ok: true, message: rowData };
 }
 
 function saveLead_(payload) {
@@ -926,6 +1078,47 @@ function ensureLeadHeader_(sheet) {
   });
 }
 
+function ensureChatHeader_(sheet) {
+  const requiredHeaders = [
+    "id",
+    "conversationUserId",
+    "conversationUserName",
+    "conversationUserEmail",
+    "senderId",
+    "senderName",
+    "senderEmail",
+    "senderRole",
+    "message",
+    "createdAt",
+  ];
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  if (!headers[0]) {
+    sheet.getRange(1, 1, 1, requiredHeaders.length).setValues([requiredHeaders]);
+    return;
+  }
+  requiredHeaders.forEach((header) => {
+    if (headers.indexOf(header) === -1) {
+      sheet.getRange(1, sheet.getLastColumn() + 1).setValue(header);
+    }
+  });
+}
+
+function chatColumns_(headers) {
+  return {
+    id: headers.indexOf("id"),
+    conversationUserId: headers.indexOf("conversationUserId"),
+    conversationUserName: headers.indexOf("conversationUserName"),
+    conversationUserEmail: headers.indexOf("conversationUserEmail"),
+    senderId: headers.indexOf("senderId"),
+    senderName: headers.indexOf("senderName"),
+    senderEmail: headers.indexOf("senderEmail"),
+    senderRole: headers.indexOf("senderRole"),
+    message: headers.indexOf("message"),
+    createdAt: headers.indexOf("createdAt"),
+  };
+}
+
 function campaignBannerColumns_(headers) {
   return {
     campaignId: headers.indexOf("campaignId"),
@@ -947,6 +1140,7 @@ function getSheet_(name) {
     if (name === "CampaignBanners") sheet.appendRow(["campaignId", "chunkIndex", "chunkCount", "mime", "chunkData", "createdAt"]);
     if (name === "Leads") sheet.appendRow(["id", "campaignId", "campaignTitle", "ownerId", "customerName", "phone", "email", "salesPerson", "notes", "badgeNumber", "createdAt"]);
     if (name === "Subscriptions") sheet.appendRow(["userId", "email", "role", "status", "amountCents", "currency", "trialDays", "stripeCheckoutSessionId", "stripeCheckoutUrl", "createdAt"]);
+    if (name === "ChatMessages") sheet.appendRow(["id", "conversationUserId", "conversationUserName", "conversationUserEmail", "senderId", "senderName", "senderEmail", "senderRole", "message", "createdAt"]);
   }
   return sheet;
 }

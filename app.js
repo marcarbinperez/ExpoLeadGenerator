@@ -10,6 +10,7 @@ const STORE_KEYS = {
   leads: "expolead.leads",
   session: "expolead.session",
   settings: "expolead.settings",
+  chatRead: "expolead.chatRead",
 };
 
 const state = {
@@ -26,10 +27,19 @@ const state = {
     campaigns: [],
     leads: [],
   },
+  chat: {
+    open: false,
+    selectedUserId: "",
+    conversations: [],
+    messages: [],
+    pollTimer: null,
+    loading: false,
+  },
 };
 
 const LEADS_PER_PAGE = 20;
 const ACCOUNT_QR_PER_PAGE = 12;
+const CHAT_POLL_MS = 6000;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -304,6 +314,7 @@ function updateAuthUi() {
   const subscribeButton = $("#subscribeButton");
   if (!state.user) {
     document.querySelector(".app-shell").classList.add("public-mode");
+    updateChatVisibility();
     authTitle.textContent = "Create or open an account";
     label.textContent = "No account signed in";
     logout.classList.add("hidden");
@@ -315,6 +326,7 @@ function updateAuthUi() {
     return;
   }
   document.querySelector(".app-shell").classList.remove("public-mode");
+  updateChatVisibility();
   const hasAccess = hasSubscriptionAccess(state.user);
   navButtons.forEach((button) => {
     const captureView = button.dataset.viewButton === "capture";
@@ -509,6 +521,193 @@ function populateAdminCampaignSelect() {
 function populateAdminManagementForms() {
   populateAdminUserSelect();
   populateAdminEventSelects();
+}
+
+function chatConversationKey(userId = currentChatUserId()) {
+  return userId ? `chat:${userId}` : "";
+}
+
+function currentChatUserId() {
+  if (!state.user) return "";
+  return isAdmin() ? state.chat.selectedUserId : state.user.id;
+}
+
+function chatReadMap() {
+  return readStore(STORE_KEYS.chatRead, {});
+}
+
+function setChatRead(userId, createdAt) {
+  if (!userId || !createdAt) return;
+  const readMap = chatReadMap();
+  readMap[chatConversationKey(userId)] = createdAt;
+  writeStore(STORE_KEYS.chatRead, readMap);
+}
+
+function chatReadAt(userId) {
+  return chatReadMap()[chatConversationKey(userId)] || "";
+}
+
+function latestMessageAt(messages) {
+  return messages.reduce((latest, message) => {
+    const createdAt = String(message.createdAt || "");
+    return createdAt > latest ? createdAt : latest;
+  }, "");
+}
+
+function updateChatVisibility() {
+  const widget = $("#chatWidget");
+  if (!widget) return;
+  widget.classList.toggle("hidden", !state.user);
+}
+
+function setChatOpen(open) {
+  state.chat.open = open;
+  $("#chatPanel")?.classList.toggle("hidden", !open);
+  $("#chatBubble")?.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {
+    refreshChat({ markRead: true });
+  }
+}
+
+function renderChatConversations() {
+  const controls = $("#chatAdminControls");
+  const select = $("#chatUserSelect");
+  if (!controls || !select) return;
+
+  controls.classList.toggle("hidden", !isAdmin());
+  if (!isAdmin()) return;
+
+  const selectedValue = state.chat.selectedUserId || select.value;
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose user";
+  select.appendChild(placeholder);
+
+  state.chat.conversations.forEach((conversation) => {
+    const option = document.createElement("option");
+    option.value = conversation.userId;
+    option.textContent = `${conversation.userName || conversation.userEmail || "User"}${conversation.latestMessageAt ? " - new activity" : ""}`;
+    select.appendChild(option);
+  });
+
+  if (state.chat.conversations.some((conversation) => conversation.userId === selectedValue)) {
+    state.chat.selectedUserId = selectedValue;
+  } else if (!state.chat.selectedUserId && state.chat.conversations.length) {
+    state.chat.selectedUserId = state.chat.conversations[0].userId;
+  }
+  select.value = state.chat.selectedUserId || "";
+}
+
+function renderChatMessages() {
+  const list = $("#chatMessages");
+  if (!list) return;
+
+  const targetUserId = currentChatUserId();
+  if (isAdmin() && !targetUserId) {
+    list.innerHTML = `<div class="chat-empty">Choose a user to start or continue a chat.</div>`;
+    return;
+  }
+
+  if (!state.chat.messages.length) {
+    list.innerHTML = `<div class="chat-empty">No messages yet. Send the first message here.</div>`;
+    return;
+  }
+
+  list.innerHTML = state.chat.messages.map((message) => {
+    const mine = message.senderId === state.user.id;
+    const time = message.createdAt ? new Date(message.createdAt).toLocaleString() : "";
+    const sender = mine ? "You" : message.senderName || (message.senderRole === "admin" ? "Admin" : "User");
+    return `
+      <div class="chat-message ${mine ? "mine" : ""}">
+        <small>${escapeHtml(sender)}${time ? ` · ${escapeHtml(time)}` : ""}</small>
+        <p>${escapeHtml(message.message)}</p>
+      </div>
+    `;
+  }).join("");
+  list.scrollTop = list.scrollHeight;
+}
+
+function updateChatBadge() {
+  const badge = $("#chatUnreadCount");
+  if (!badge || !state.user) return;
+
+  let unread = 0;
+  if (isAdmin()) {
+    unread = state.chat.conversations.filter((conversation) => {
+      if (!conversation.latestMessageAt || conversation.latestSenderId === state.user.id) return false;
+      return conversation.latestMessageAt > chatReadAt(conversation.userId);
+    }).length;
+  } else {
+    const readAt = chatReadAt(state.user.id);
+    unread = state.chat.messages.filter((message) => {
+      if (message.senderId === state.user.id) return false;
+      return String(message.createdAt || "") > readAt;
+    }).length;
+  }
+
+  badge.textContent = unread > 99 ? "99+" : String(unread);
+  badge.classList.toggle("hidden", unread <= 0);
+}
+
+async function refreshChat(options = {}) {
+  if (!state.user || state.chat.loading) return;
+  state.chat.loading = true;
+  try {
+    if (isAdmin()) {
+      const conversations = await syncToSheet("getChatConversations", {
+        adminUserId: state.user.id,
+        adminEmail: state.user.email,
+      });
+      if (conversations.ok) {
+        state.chat.conversations = conversations.conversations || [];
+        renderChatConversations();
+      }
+    }
+
+    const targetUserId = currentChatUserId();
+    if (!targetUserId) {
+      state.chat.messages = [];
+      renderChatMessages();
+      updateChatBadge();
+      return;
+    }
+
+    const result = await syncToSheet("getChatMessages", {
+      userId: state.user.id,
+      email: state.user.email,
+      targetUserId,
+    });
+    if (result.ok) {
+      state.chat.messages = result.messages || [];
+      if (options.markRead || state.chat.open) {
+        setChatRead(targetUserId, latestMessageAt(state.chat.messages));
+      }
+      renderChatMessages();
+      updateChatBadge();
+    }
+  } finally {
+    state.chat.loading = false;
+  }
+}
+
+function startChatPolling() {
+  updateChatVisibility();
+  if (!state.user) return;
+  if (state.chat.pollTimer) clearInterval(state.chat.pollTimer);
+  refreshChat();
+  state.chat.pollTimer = setInterval(() => refreshChat(), CHAT_POLL_MS);
+}
+
+function stopChatPolling() {
+  if (state.chat.pollTimer) clearInterval(state.chat.pollTimer);
+  state.chat.pollTimer = null;
+  state.chat.open = false;
+  state.chat.selectedUserId = "";
+  state.chat.conversations = [];
+  state.chat.messages = [];
+  $("#chatPanel")?.classList.add("hidden");
+  updateChatVisibility();
 }
 
 function populateAdminUserSelect() {
@@ -1021,9 +1220,25 @@ function requireSubscriptionAccess() {
 function signOut() {
   localStorage.removeItem(STORE_KEYS.session);
   state.user = null;
+  stopChatPolling();
   setMobileMenu(false);
   updateAuthUi();
   setView("auth");
+}
+
+async function sendChatMessage(message) {
+  if (!state.user) return { ok: false, message: "Log in first." };
+  const targetUserId = currentChatUserId();
+  if (isAdmin() && !targetUserId) {
+    return { ok: false, message: "Choose a user to message." };
+  }
+  return syncToSheet("sendChatMessage", {
+    userId: state.user.id,
+    email: state.user.email,
+    targetUserId,
+    message: message.trim(),
+    createdAt: new Date().toISOString(),
+  });
 }
 
 async function openCapture(campaignId) {
@@ -1173,6 +1388,7 @@ $("#signupForm").addEventListener("submit", async (event) => {
   form.reset();
   updateAuthUi();
   await syncToSheet("saveAccount", user);
+  startChatPolling();
   toast("Account created.");
   setView("auth");
 });
@@ -1209,12 +1425,34 @@ $("#loginForm").addEventListener("submit", async (event) => {
   await refreshAccountFromSheet();
   renderLeads();
   loadAccountQrData();
+  startChatPolling();
   toast(accountStatusMessage(state.user) || "Logged in.");
   setView("auth");
 });
 
 $("#logoutButton").addEventListener("click", signOut);
 $("#accountSignOutButton").addEventListener("click", signOut);
+
+$("#chatBubble").addEventListener("click", () => setChatOpen(!state.chat.open));
+$("#chatCloseButton").addEventListener("click", () => setChatOpen(false));
+$("#chatUserSelect").addEventListener("change", (event) => {
+  state.chat.selectedUserId = event.currentTarget.value;
+  state.chat.messages = [];
+  refreshChat({ markRead: true });
+});
+$("#chatForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = $("#chatInput");
+  const message = input.value.trim();
+  if (!message) return;
+  const result = await sendChatMessage(message);
+  if (!result.ok) {
+    toast(result.message || "Message could not be sent.");
+    return;
+  }
+  input.value = "";
+  await refreshChat({ markRead: true });
+});
 
 $("#menuToggleButton").addEventListener("click", (event) => {
   event.stopPropagation();
@@ -1674,3 +1912,4 @@ refreshAccountFromSheet();
 loadAccountQrData();
 renderLeads();
 handleHashRoute();
+startChatPolling();

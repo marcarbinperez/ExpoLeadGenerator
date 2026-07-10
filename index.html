@@ -481,6 +481,37 @@
       </main>
     </div>
 
+    <div class="chat-widget hidden" id="chatWidget" aria-live="polite">
+      <button class="chat-bubble" id="chatBubble" type="button" aria-expanded="false" aria-controls="chatPanel" aria-label="Open admin chat">
+        <span class="chat-icon" aria-hidden="true"></span>
+        <span class="chat-count hidden" id="chatUnreadCount">0</span>
+      </button>
+
+      <section class="chat-panel hidden" id="chatPanel" aria-label="Admin chat">
+        <div class="chat-header">
+          <div>
+            <strong id="chatTitle">Chat with Admin</strong>
+            <span id="chatSubtitle">Messages sync through your secure account.</span>
+          </div>
+          <button class="chat-close" id="chatCloseButton" type="button" aria-label="Close chat">×</button>
+        </div>
+
+        <div class="chat-admin-controls hidden" id="chatAdminControls">
+          <label>
+            User
+            <select id="chatUserSelect" aria-label="Choose user to chat with"></select>
+          </label>
+        </div>
+
+        <div class="chat-messages" id="chatMessages" role="log" aria-live="polite"></div>
+
+        <form class="chat-form" id="chatForm">
+          <textarea id="chatInput" name="message" rows="2" placeholder="Type your message..." required></textarea>
+          <button class="primary-button" type="submit">Send</button>
+        </form>
+      </section>
+    </div>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>
 </html>
