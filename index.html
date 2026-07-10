@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Expo Lead Generator</title>
+    <link rel="icon" type="image/png" href="assets/expo-lead-generator-logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="qrcode.min.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="side-panel" aria-label="Primary">
+        <div class="mobile-nav-bar">
+          <div class="brand">
+            <div>
+              <strong>Expo Lead Generator</strong>
+              <span>Lead capture and badge check-in</span>
+            </div>
+          </div>
+          <button class="menu-toggle" id="menuToggleButton" type="button" aria-expanded="false" aria-controls="mobileMenuContent" aria-label="Open navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+        </div>
+
+        <div class="mobile-menu-content" id="mobileMenuContent">
+          <div class="brand desktop-brand">
+            <div>
+              <strong>Expo Lead Generator</strong>
+              <span>Lead capture and badge check-in</span>
+            </div>
+          </div>
+
+          <nav class="nav-stack" aria-label="Views">
+            <button class="nav-item active" data-view-button="auth" type="button">
+              <span>Account</span>
+            </button>
+            <button class="nav-item" data-view-button="dashboard" type="button">
+              <span>QR Dashboard</span>
+            </button>
+            <button class="nav-item" data-view-button="capture" type="button">
+              <span>Scan Preview</span>
+            </button>
+            <button class="nav-item hidden" data-view-button="admin" type="button">
+              <span>Admin</span>
+            </button>
+          </nav>
+
+          <div class="side-graphic" aria-hidden="true">
+            <img class="side-logo" src="assets/expo-lead-generator-logo.png" alt="" />
+            <div class="scan-motif">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          </div>
+
+          <button class="sidebar-signout hidden" id="logoutButton" type="button">Sign out</button>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <section class="view active" id="authView" aria-labelledby="authTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">Secure workspace</p>
+              <h1 id="authTitle">Create or open an account</h1>
+            </div>
+          </div>
+
+          <div class="auth-showcase" id="authShowcase" aria-hidden="true">
+            <div class="auth-copy">
+              <img class="auth-logo" src="assets/expo-lead-generator-logo.png" alt="" />
+              <p class="eyebrow">Expo-ready QR workflows</p>
+              <h2>Capture leads, personalize scan pages, and verify badges from one polished workspace.</h2>
+              <div class="auth-pills">
+                <span>QR lead capture</span>
+                <span>Badge check-in</span>
+                <span>CSV exports</span>
+              </div>
+            </div>
+            <div class="auth-visual">
+              <div class="phone-frame">
+                <div class="phone-speaker"></div>
+                <div class="phone-card">
+                  <span>Live Scan Preview</span>
+                  <strong>Expo Lead Generator</strong>
+                  <div class="mini-qr">
+                    <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                  </div>
+                  <div class="lead-lines">
+                    <b></b>
+                    <b></b>
+                    <b></b>
+                  </div>
+                </div>
+              </div>
+              <div class="floating-badge">
+                <span>Capture The Leads</span>
+                <strong>Register Now!</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="auth-layout">
+            <form class="form-panel" id="signupForm">
+              <h2>Create Account</h2>
+              <label>
+                Account Type
+                <select name="role" required>
+                  <option value="presenter">Exhibitor</option>
+                  <option value="organizer">Expo Organiser</option>
+                </select>
+              </label>
+              <label>
+                Organization or Name
+                <input name="name" autocomplete="organization" required />
+              </label>
+              <label>
+                Email
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                Password
+                <input name="password" type="password" autocomplete="new-password" minlength="6" required />
+              </label>
+              <button class="primary-button" type="submit">Create account</button>
+            </form>
+
+            <form class="form-panel" id="loginForm">
+              <h2>Log In</h2>
+              <label>
+                Email
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                Password
+                <input name="password" type="password" autocomplete="current-password" required />
+              </label>
+              <button class="secondary-button" type="submit">Open dashboard</button>
+              <p class="current-user" id="currentUser">No account signed in</p>
+            </form>
+          </div>
+
+          <div class="account-management hidden" id="accountManagement">
+            <form class="form-panel" id="changePasswordForm">
+              <h2>Change Password</h2>
+              <p class="current-user" id="accountUserSummary"></p>
+              <label>
+                Current Password
+                <input name="currentPassword" type="password" autocomplete="current-password" required />
+              </label>
+              <label>
+                New Password
+                <input name="newPassword" type="password" autocomplete="new-password" minlength="6" required />
+              </label>
+              <label>
+                Confirm New Password
+                <input name="confirmPassword" type="password" autocomplete="new-password" minlength="6" required />
+              </label>
+              <div class="qr-actions">
+                <button class="primary-button" type="submit">Update password</button>
+                <button class="ghost-button" id="accountSignOutButton" type="button">Sign out</button>
+              </div>
+            </form>
+
+            <div class="form-panel subscription-panel" id="subscriptionPanel">
+              <h2>Subscription</h2>
+              <p class="current-user" id="subscriptionStatus">15-day trial from account creation, then $7.99 per month.</p>
+              <div class="subscription-price">
+                <span>$7.99</span>
+                <strong>per month</strong>
+              </div>
+              <p class="subscription-note" id="trialStatusText"></p>
+              <button class="primary-button" id="subscribeButton" type="button">Start subscription</button>
+            </div>
+
+            <div class="form-panel account-qr-panel">
+              <div class="section-heading compact-heading">
+                <h2>Event QR Codes</h2>
+                <button class="ghost-button" id="accountQrRefreshButton" type="button">Refresh QR</button>
+              </div>
+              <div class="account-qr-list" id="accountQrList"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="dashboardView" aria-labelledby="dashboardTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">QR generator</p>
+              <h1 id="dashboardTitle">Campaign dashboard</h1>
+            </div>
+          </div>
+
+          <div class="dashboard-grid">
+            <form class="form-panel" id="campaignForm">
+              <h2>Create QR</h2>
+              <label>
+                QR Name
+                <input name="title" placeholder="Spring Expo booth A12" required />
+              </label>
+              <label id="destinationField">
+                Destination Link
+                <input name="destinationUrl" type="text" inputmode="url" placeholder="example.com/offer" />
+              </label>
+              <label>
+                Event or Booth Label
+                <input name="eventName" placeholder="Expo 2026" required />
+              </label>
+              <label>
+                Scan Preview Banner
+                <input name="banner" type="file" accept="image/*" />
+              </label>
+              <div class="banner-preview hidden" id="bannerPreview" aria-label="Selected banner preview"></div>
+              <button class="primary-button" type="submit">Generate QR</button>
+            </form>
+
+            <div class="qr-workspace">
+              <div class="qr-stage">
+                <div id="qrCode" class="qr-code" aria-label="Generated QR code"></div>
+                <p id="qrEmpty">Create a QR campaign to see the code here.</p>
+              </div>
+              <div class="qr-actions">
+                <button class="secondary-button" id="downloadQrButton" type="button">Download QR</button>
+                <button class="ghost-button" id="copyLinkButton" type="button">Copy scan link</button>
+              </div>
+              <div class="scan-link" id="scanLinkText"></div>
+            </div>
+          </div>
+
+          <div class="verify-panel" id="verifyPanel">
+            <h2>Organiser Badge Verification</h2>
+            <form id="verifyForm" class="inline-form">
+              <select name="campaignId" id="verifyCampaignSelect" aria-label="Choose campaign for badge verification">
+                <option value="all">All campaigns</option>
+              </select>
+              <input name="badge" placeholder="Enter badge number" required />
+              <button class="secondary-button" type="submit">Verify</button>
+            </form>
+            <p id="verifyResult"></p>
+          </div>
+
+          <div class="data-section">
+            <div class="section-heading">
+              <h2>Leads and Badges</h2>
+              <div class="export-controls">
+                <input id="leadSearchInput" type="search" placeholder="Search leads" aria-label="Search leads" />
+                <select id="csvCampaignSelect" aria-label="Choose expo batch for CSV download">
+                  <option value="all">All expo batches</option>
+                </select>
+                <button class="ghost-button" id="downloadCsvButton" type="button">Download CSV</button>
+                <button class="ghost-button" id="refreshButton" type="button">Refresh</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Email</th>
+                    <th>Sales Person</th>
+                    <th>Notes</th>
+                    <th>Campaign</th>
+                    <th>Badge</th>
+                    <th>Date</th>
+                  </tr>
+                </thead>
+                <tbody id="leadTable"></tbody>
+              </table>
+            </div>
+            <div class="pagination-controls" aria-label="Lead table pagination">
+              <button class="ghost-button" id="leadPrevButton" type="button">Previous</button>
+              <span id="leadPageInfo">Page 1 of 1</span>
+              <button class="ghost-button" id="leadNextButton" type="button">Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="captureView" aria-labelledby="captureTitle">
+          <div class="capture-hero">
+            <div>
+              <p class="eyebrow">Customer scan page</p>
+              <h1 id="captureTitle">Lead capture</h1>
+              <p id="captureSubtitle">Submit your contact details to continue.</p>
+            </div>
+          </div>
+
+          <form class="capture-form" id="leadForm">
+            <input name="campaignId" type="hidden" />
+            <label>
+              Name
+              <input name="customerName" autocomplete="name" required />
+            </label>
+            <label>
+              Phone Number
+              <input name="phone" type="tel" autocomplete="tel" required />
+            </label>
+            <label>
+              Email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Sales person you want to meet
+              <input name="salesPerson" autocomplete="off" />
+            </label>
+            <label>
+              Notes
+              <textarea name="notes" rows="4" placeholder="Add any request, interest, or follow-up details"></textarea>
+            </label>
+            <button class="primary-button" type="submit">Submit</button>
+          </form>
+
+          <div class="badge-output hidden" id="badgeOutput">
+            <span>Your badge number</span>
+            <strong id="badgeNumber"></strong>
+            <p>Show this number to the expo organiser for verification.</p>
+          </div>
+        </section>
+
+        <section class="view" id="adminView" aria-labelledby="adminTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">Admin records</p>
+              <h1 id="adminTitle">All Event Data</h1>
+            </div>
+            <button class="secondary-button" id="adminRefreshButton" type="button">Refresh records</button>
+          </div>
+
+          <div class="admin-management">
+            <form class="form-panel" id="adminUserForm">
+              <h2>Manage User Account</h2>
+              <label>
+                User
+                <select name="userId" id="adminUserSelect" required>
+                  <option value="">Choose user</option>
+                </select>
+              </label>
+              <label>
+                Name
+                <input name="name" required />
+              </label>
+              <label>
+                Email
+                <input name="email" type="email" required />
+              </label>
+              <label>
+                Role
+                <select name="role" required>
+                  <option value="presenter">Exhibitor</option>
+                  <option value="organizer">Expo Organiser</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </label>
+              <label>
+                Subscription
+                <select name="subscriptionStatus">
+                  <option value="">No subscription override</option>
+                  <option value="active">Active</option>
+                  <option value="trialing">Trialing</option>
+                  <option value="past_due">Past due</option>
+                  <option value="canceled">Canceled</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </label>
+              <label>
+                Temporary Password
+                <input name="temporaryPassword" type="text" placeholder="Leave blank to keep current password" />
+              </label>
+              <button class="primary-button" type="submit">Save user</button>
+            </form>
+
+            <form class="form-panel" id="adminEventForm">
+              <h2>Manage Event</h2>
+              <label>
+                Event
+                <select name="campaignId" id="adminEventSelect" required>
+                  <option value="">Choose event</option>
+                </select>
+              </label>
+              <label>
+                Owner
+                <select name="ownerId" id="adminEventOwnerSelect" required>
+                  <option value="">Choose owner</option>
+                </select>
+              </label>
+              <label>
+                Account Type
+                <select name="type" required>
+                  <option value="presenter">Exhibitor</option>
+                  <option value="organizer">Expo Organiser</option>
+                </select>
+              </label>
+              <label>
+                QR Name
+                <input name="title" required />
+              </label>
+              <label>
+                Event or Booth Label
+                <input name="eventName" required />
+              </label>
+              <label>
+                Destination Link
+                <input name="destinationUrl" type="text" inputmode="url" placeholder="Only needed for exhibitors" />
+              </label>
+              <label>
+                Scan Preview Banner
+                <input name="banner" type="file" accept="image/*" />
+              </label>
+              <div class="banner-preview hidden" id="adminBannerPreview" aria-label="Selected admin banner preview"></div>
+              <label class="checkbox-field">
+                <input name="clearBanner" type="checkbox" />
+                Clear current banner
+              </label>
+              <button class="primary-button" type="submit">Save event</button>
+            </form>
+          </div>
+
+          <div class="data-section">
+            <div class="section-heading">
+              <h2>Exhibitors and Expo Organisers</h2>
+              <div class="export-controls">
+                <input id="adminSearchInput" type="search" placeholder="Search all records" aria-label="Search all records" />
+                <select id="adminCampaignSelect" aria-label="Choose event for admin CSV download">
+                  <option value="all">All events</option>
+                </select>
+                <button class="ghost-button" id="adminDownloadCsvButton" type="button">Download CSV</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Owner</th>
+                    <th>Type</th>
+                    <th>Campaign</th>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Email</th>
+                    <th>Sales Person</th>
+                    <th>Notes</th>
+                    <th>Badge</th>
+                    <th>Date</th>
+                  </tr>
+                </thead>
+                <tbody id="adminLeadTable"></tbody>
+              </table>
+            </div>
+            <div class="pagination-controls" aria-label="Admin lead table pagination">
+              <button class="ghost-button" id="adminPrevButton" type="button">Previous</button>
+              <span id="adminPageInfo">Page 1 of 1</span>
+              <button class="ghost-button" id="adminNextButton" type="button">Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="settingsView" aria-labelledby="settingsTitle" hidden>
+          <h1 id="settingsTitle">Sheet sync settings</h1>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
