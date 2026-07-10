@@ -826,6 +826,10 @@ textarea {
   gap: 14px;
 }
 
+.account-qr-panel .export-controls input {
+  width: min(320px, 100%);
+}
+
 .account-qr-card {
   display: grid;
   gap: 12px;

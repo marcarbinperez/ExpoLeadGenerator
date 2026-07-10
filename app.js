@@ -17,6 +17,8 @@ const state = {
   selectedCampaign: null,
   leadSearch: "",
   leadPage: 1,
+  accountQrSearch: "",
+  accountQrPage: 1,
   adminSearch: "",
   adminPage: 1,
   adminData: {
@@ -27,6 +29,7 @@ const state = {
 };
 
 const LEADS_PER_PAGE = 20;
+const ACCOUNT_QR_PER_PAGE = 12;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -243,8 +246,11 @@ function setMobileMenu(open) {
 
 function setView(name) {
   const isCustomerScanRoute = name === "capture" && window.location.hash.replace(/^#/, "").startsWith("capture/");
+  if (name === "capture" && !isCustomerScanRoute) {
+    name = "auth";
+  }
   if ((name === "dashboard" || name === "capture") && !isCustomerScanRoute && state.user && !hasSubscriptionAccess(state.user)) {
-    toast("Your trial has ended. Subscribe to access QR Dashboard and Scan Preview.");
+    toast("Your trial has ended. Subscribe to access QR Dashboard.");
     name = "auth";
   }
   if ((name === "dashboard" || name === "capture") && !isCustomerScanRoute && isAdmin()) {
@@ -289,9 +295,10 @@ function updateAuthUi() {
   document.querySelector(".app-shell").classList.remove("public-mode");
   const hasAccess = hasSubscriptionAccess(state.user);
   navButtons.forEach((button) => {
-    const gatedView = button.dataset.viewButton === "dashboard" || button.dataset.viewButton === "capture";
+    const captureView = button.dataset.viewButton === "capture";
+    const gatedView = button.dataset.viewButton === "dashboard";
     const adminView = button.dataset.viewButton === "admin";
-    button.classList.toggle("hidden", (gatedView && (!hasAccess || isAdmin())) || (adminView && !isAdmin()));
+    button.classList.toggle("hidden", captureView || (gatedView && (!hasAccess || isAdmin())) || (adminView && !isAdmin()));
   });
   const activeView = document.querySelector(".view.active")?.id;
   if ((!hasAccess || isAdmin()) && (activeView === "dashboardView" || activeView === "captureView")) {
@@ -573,22 +580,29 @@ function renderAccountQrList() {
   if (!list) return;
   if (!state.user) {
     list.innerHTML = "";
+    updateAccountQrPagination(0, 1);
     return;
   }
 
+  const query = state.accountQrSearch.trim().toLowerCase();
   const campaigns = accountCampaigns().slice().sort((a, b) => {
     const firstDate = String(b.createdAt || "");
     const secondDate = String(a.createdAt || "");
     return firstDate.localeCompare(secondDate);
-  });
+  }).filter((campaign) => accountQrMatchesSearch(campaign, query));
+  const pageCount = Math.max(1, Math.ceil(campaigns.length / ACCOUNT_QR_PER_PAGE));
+  state.accountQrPage = Math.min(Math.max(state.accountQrPage, 1), pageCount);
+  const pageStart = (state.accountQrPage - 1) * ACCOUNT_QR_PER_PAGE;
+  const visibleCampaigns = campaigns.slice(pageStart, pageStart + ACCOUNT_QR_PER_PAGE);
 
   if (!campaigns.length) {
-    list.innerHTML = `<p class="current-user">${isAdmin() ? "No event QR codes found yet." : "No event QR codes created yet."}</p>`;
+    list.innerHTML = `<p class="current-user">${query ? "No QR events match your search." : isAdmin() ? "No event QR codes found yet." : "No event QR codes created yet."}</p>`;
+    updateAccountQrPagination(0, 1);
     return;
   }
 
   list.innerHTML = "";
-  campaigns.forEach((campaign) => {
+  visibleCampaigns.forEach((campaign) => {
     const card = document.createElement("article");
     card.className = "account-qr-card";
     card.innerHTML = `
@@ -606,6 +620,31 @@ function renderAccountQrList() {
     list.appendChild(card);
     drawQrInto(card.querySelector("[data-account-qr-code]"), scanUrl(campaign.id), 132);
   });
+  updateAccountQrPagination(campaigns.length, pageCount);
+}
+
+function accountQrMatchesSearch(campaign, query) {
+  if (!query) return true;
+  const haystack = [
+    campaign.title,
+    campaign.eventName,
+    campaign.ownerName,
+    roleLabel(campaign.type),
+  ].join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function updateAccountQrPagination(totalRows, pageCount) {
+  const pageInfo = $("#accountQrPageInfo");
+  const prevButton = $("#accountQrPrevButton");
+  const nextButton = $("#accountQrNextButton");
+  if (!pageInfo || !prevButton || !nextButton) return;
+
+  pageInfo.textContent = totalRows
+    ? `Page ${state.accountQrPage} of ${pageCount}`
+    : "Page 1 of 1";
+  prevButton.disabled = state.accountQrPage <= 1 || !totalRows;
+  nextButton.disabled = state.accountQrPage >= pageCount || !totalRows;
 }
 
 function drawQrInto(holder, text, size) {
@@ -798,6 +837,16 @@ async function refreshRecordsFromSheet() {
   return { ok: true };
 }
 
+async function openDashboardFromSheet() {
+  if (!requireSubscriptionAccess()) return;
+  setView("dashboard");
+  const result = await refreshRecordsFromSheet();
+  if (!result.ok) {
+    renderLeads();
+    toast(result.message || "Dashboard records could not be loaded from Google Sheets.");
+  }
+}
+
 async function saveAdminUser(form) {
   const data = Object.fromEntries(new FormData(form));
   if (!data.userId) {
@@ -939,7 +988,7 @@ function requireUser() {
 function requireSubscriptionAccess() {
   if (!requireUser()) return false;
   if (hasSubscriptionAccess(state.user)) return true;
-  toast("Your trial has ended. Subscribe to access QR Dashboard and Scan Preview.");
+  toast("Your trial has ended. Subscribe to access QR Dashboard.");
   setView("auth");
   return false;
 }
@@ -1042,7 +1091,7 @@ function adminCsvDownload() {
   URL.revokeObjectURL(url);
 }
 
-function handleHashRoute() {
+async function handleHashRoute() {
   const route = window.location.hash.replace(/^#/, "");
   if (route === "dashboard") {
     if (isAdmin()) {
@@ -1050,9 +1099,7 @@ function handleHashRoute() {
       loadAdminData();
       return;
     }
-    if (!requireSubscriptionAccess()) return;
-    setView("dashboard");
-    renderLeads();
+    await openDashboardFromSheet();
     return;
   }
   if (route === "auth") {
@@ -1472,6 +1519,24 @@ $("#accountQrRefreshButton").addEventListener("click", async () => {
   toast("Event QR list refreshed.");
 });
 
+$("#accountQrSearchInput").addEventListener("input", (event) => {
+  state.accountQrSearch = event.currentTarget.value;
+  state.accountQrPage = 1;
+  renderAccountQrList();
+});
+
+$("#accountQrPrevButton").addEventListener("click", () => {
+  if (!requireUser() || state.accountQrPage <= 1) return;
+  state.accountQrPage -= 1;
+  renderAccountQrList();
+});
+
+$("#accountQrNextButton").addEventListener("click", () => {
+  if (!requireUser()) return;
+  state.accountQrPage += 1;
+  renderAccountQrList();
+});
+
 $("#accountQrList").addEventListener("click", async (event) => {
   const downloadButton = event.target.closest("[data-account-download-qr]");
   const copyButton = event.target.closest("[data-account-copy-link]");
@@ -1543,10 +1608,15 @@ $("#copyLinkButton").addEventListener("click", async () => {
 });
 
 $$("[data-view-button]").forEach((button) => {
-  button.addEventListener("click", () => {
+  button.addEventListener("click", async () => {
     const view = button.dataset.viewButton;
     if (view === "dashboard" && !requireUser()) return;
-    if ((view === "dashboard" || view === "capture") && isAdmin()) {
+    if (view === "capture") {
+      setView("auth");
+      setMobileMenu(false);
+      return;
+    }
+    if (view === "dashboard" && isAdmin()) {
       setView("admin");
       loadAdminData();
       return;
@@ -1555,10 +1625,13 @@ $$("[data-view-button]").forEach((button) => {
       toast("Admin access is required.");
       return;
     }
-    if ((view === "dashboard" || view === "capture") && !requireSubscriptionAccess()) return;
+    if (view === "dashboard") {
+      setMobileMenu(false);
+      await openDashboardFromSheet();
+      return;
+    }
     setView(view);
     setMobileMenu(false);
-    if (view === "dashboard") renderLeads();
     if (view === "admin") loadAdminData();
     if (view === "auth" && state.user) {
       refreshAccountFromSheet();

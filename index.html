@@ -190,9 +190,17 @@
             <div class="form-panel account-qr-panel">
               <div class="section-heading compact-heading">
                 <h2>Event QR Codes</h2>
-                <button class="ghost-button" id="accountQrRefreshButton" type="button">Refresh QR</button>
+                <div class="export-controls">
+                  <input id="accountQrSearchInput" type="search" placeholder="Search QR events" aria-label="Search QR events" />
+                  <button class="ghost-button" id="accountQrRefreshButton" type="button">Refresh QR</button>
+                </div>
               </div>
               <div class="account-qr-list" id="accountQrList"></div>
+              <div class="pagination-controls" aria-label="Event QR pagination">
+                <button class="ghost-button" id="accountQrPrevButton" type="button">Previous</button>
+                <span id="accountQrPageInfo">Page 1 of 1</span>
+                <button class="ghost-button" id="accountQrNextButton" type="button">Next</button>
+              </div>
             </div>
           </div>
         </section>
