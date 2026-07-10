@@ -219,6 +219,26 @@ function hasSubscriptionAccess(user) {
   return trialDaysRemaining(user) > 0 || Boolean(user?.subscriptionActive);
 }
 
+function accountStatusMessage(user) {
+  if (!user) return "";
+  if (isAdmin(user)) return "Admin account. Full access is enabled.";
+  if (user.subscriptionActive) {
+    return `Subscription active${user.subscriptionStatus ? `: ${user.subscriptionStatus}` : ""}. QR Dashboard access is enabled.`;
+  }
+  const remainingDays = trialDaysRemaining(user);
+  if (remainingDays > 0) {
+    return `Trial active: ${remainingDays} day${remainingDays === 1 ? "" : "s"} remaining. QR Dashboard access is enabled.`;
+  }
+  return "Trial ended. Subscribe to access QR Dashboard.";
+}
+
+function accountStatusLabel(user) {
+  if (!user) return "15-day trial from account creation, then $7.99 per month.";
+  if (isAdmin(user)) return "Admin access";
+  if (user.subscriptionActive) return "Monthly subscription active";
+  return trialDaysRemaining(user) > 0 ? "Free trial active" : "Subscription required";
+}
+
 function isAdmin(user = state.user) {
   return user?.role === "admin";
 }
@@ -280,6 +300,8 @@ function updateAuthUi() {
   const accountManagement = $("#accountManagement");
   const accountUserSummary = $("#accountUserSummary");
   const trialStatusText = $("#trialStatusText");
+  const subscriptionStatus = $("#subscriptionStatus");
+  const subscribeButton = $("#subscribeButton");
   if (!state.user) {
     document.querySelector(".app-shell").classList.add("public-mode");
     authTitle.textContent = "Create or open an account";
@@ -307,12 +329,14 @@ function updateAuthUi() {
   label.textContent = `${state.user.name} signed in as ${roleLabel(state.user.role)}`;
   authTitle.textContent = "Account settings";
   accountUserSummary.textContent = `${state.user.name} - ${state.user.email}`;
-  const remainingDays = trialDaysRemaining(state.user);
-  trialStatusText.textContent = state.user.subscriptionActive
-    ? `Subscription active${state.user.subscriptionStatus ? `: ${state.user.subscriptionStatus}` : ""}.`
-    : remainingDays
-    ? `${remainingDays} trial day${remainingDays === 1 ? "" : "s"} remaining before billing starts.`
-    : "Trial ended. Subscribe to continue monthly billing.";
+  subscriptionStatus.textContent = accountStatusLabel(state.user);
+  trialStatusText.textContent = accountStatusMessage(state.user);
+  subscribeButton.disabled = Boolean(state.user.subscriptionActive) || isAdmin();
+  subscribeButton.textContent = state.user.subscriptionActive
+    ? "Subscription active"
+    : isAdmin()
+    ? "Admin access enabled"
+    : "Start subscription";
   $("#signupForm").classList.add("hidden");
   $("#loginForm").classList.add("hidden");
   accountManagement.classList.remove("hidden");
@@ -323,12 +347,12 @@ function updateAuthUi() {
 }
 
 async function refreshAccountFromSheet() {
-  if (!state.user) return;
+  if (!state.user) return { ok: false };
   const result = await syncToSheet("getAccount", {
     userId: state.user.id,
     email: state.user.email,
   });
-  if (!result.ok || !result.user) return;
+  if (!result.ok || !result.user) return result;
 
   state.user = saveLocalUser({
     ...state.user,
@@ -336,6 +360,7 @@ async function refreshAccountFromSheet() {
     passwordHash: state.user.passwordHash,
   });
   updateAuthUi();
+  return { ok: true, user: state.user };
 }
 
 function campaignsForUser() {
@@ -1181,9 +1206,10 @@ $("#loginForm").addEventListener("submit", async (event) => {
   state.user = user;
   form.reset();
   updateAuthUi();
+  await refreshAccountFromSheet();
   renderLeads();
   loadAccountQrData();
-  toast("Logged in.");
+  toast(accountStatusMessage(state.user) || "Logged in.");
   setView("auth");
 });
 
