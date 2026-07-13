@@ -1,8 +1,11 @@
 const SHEET_ID = "1yUfreitpLB9QSbUnygiqAfQhk4HYUCF0HWf_tEO-Vw4";
+const DEFAULT_RESEND_FROM_EMAIL = "noreply@expoleadgenerator.com";
 
 function authorizeExpoLeadGeneratorServices() {
   SpreadsheetApp.openById(SHEET_ID).getName();
   PropertiesService.getScriptProperties().getProperty("STRIPE_SECRET_KEY");
+  PropertiesService.getScriptProperties().getProperty("RESEND_API_KEY");
+  PropertiesService.getScriptProperties().getProperty("RESEND_FROM_EMAIL");
   UrlFetchApp.fetch("https://api.stripe.com/v1/checkout/sessions", {
     method: "post",
     headers: {
@@ -13,6 +16,20 @@ function authorizeExpoLeadGeneratorServices() {
       success_url: "https://script.google.com",
       cancel_url: "https://script.google.com",
     },
+    muteHttpExceptions: true,
+  });
+  UrlFetchApp.fetch("https://api.resend.com/emails", {
+    method: "post",
+    headers: {
+      Authorization: "Bearer re_authorization_check",
+      "Content-Type": "application/json",
+    },
+    payload: JSON.stringify({
+      from: "Expo Lead Generator <noreply@example.com>",
+      to: "authorization-check@example.com",
+      subject: "Authorization check",
+      html: "<p>Authorization check</p>",
+    }),
     muteHttpExceptions: true,
   });
 }
@@ -69,8 +86,7 @@ function handlePost_(e) {
   }
 
   if (action === "saveLead") {
-    saveLead_(payload);
-    return json_({ ok: true });
+    return json_(saveLead_(payload));
   }
 
   if (action === "changePassword") {
@@ -265,10 +281,12 @@ function getAdminCampaigns_() {
     id: row[columns.id],
     ownerId: row[columns.ownerId],
     ownerName: row[columns.ownerName],
+    ownerEmail: columns.ownerEmail >= 0 ? row[columns.ownerEmail] : "",
     type: row[columns.type],
     title: row[columns.title],
     destinationUrl: row[columns.destinationUrl],
     eventName: row[columns.eventName],
+    emailBody: columns.emailBody >= 0 ? row[columns.emailBody] : "",
     createdAt: row[columns.createdAt],
   }));
 }
@@ -317,33 +335,34 @@ function getChatConversations_(payload) {
   const sheet = getSheet_("ChatMessages");
   ensureChatHeader_(sheet);
   const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return { ok: true, conversations: [] };
-
-  const headers = values[0];
-  const columns = chatColumns_(headers);
   const conversations = {};
 
-  values.slice(1).forEach((row) => {
-    const userId = row[columns.conversationUserId];
-    if (!userId) return;
-    const createdAt = String(row[columns.createdAt] || "");
-    if (!conversations[userId]) {
-      conversations[userId] = {
-        userId,
-        userName: row[columns.conversationUserName],
-        userEmail: row[columns.conversationUserEmail],
-        latestMessageAt: createdAt,
-        latestSenderId: row[columns.senderId],
-        latestMessage: row[columns.message],
-      };
-      return;
-    }
-    if (createdAt >= String(conversations[userId].latestMessageAt || "")) {
-      conversations[userId].latestMessageAt = createdAt;
-      conversations[userId].latestSenderId = row[columns.senderId];
-      conversations[userId].latestMessage = row[columns.message];
-    }
-  });
+  if (values.length >= 2) {
+    const headers = values[0];
+    const columns = chatColumns_(headers);
+
+    values.slice(1).forEach((row) => {
+      const userId = row[columns.conversationUserId];
+      if (!userId) return;
+      const createdAt = String(row[columns.createdAt] || "");
+      if (!conversations[userId]) {
+        conversations[userId] = {
+          userId,
+          userName: row[columns.conversationUserName],
+          userEmail: row[columns.conversationUserEmail],
+          latestMessageAt: createdAt,
+          latestSenderId: row[columns.senderId],
+          latestMessage: row[columns.message],
+        };
+        return;
+      }
+      if (createdAt >= String(conversations[userId].latestMessageAt || "")) {
+        conversations[userId].latestMessageAt = createdAt;
+        conversations[userId].latestSenderId = row[columns.senderId];
+        conversations[userId].latestMessage = row[columns.message];
+      }
+    });
+  }
 
   getAdminAccounts_()
     .filter((account) => String(account.role).toLowerCase() !== "admin")
@@ -458,7 +477,7 @@ function saveLead_(payload) {
     const ids = sheet.getRange(2, idColumn + 1, sheet.getLastRow() - 1, 1).getValues();
     for (let index = 0; index < ids.length; index++) {
       if (ids[index][0] === payload.id) {
-        return;
+        return { ok: true, duplicate: true };
       }
     }
   }
@@ -468,6 +487,99 @@ function saveLead_(payload) {
     return payload[header] || "";
   });
   sheet.appendRow(row);
+  const emailResult = sendLeadAutoEmail_(payload);
+  return {
+    ok: true,
+    emailSent: emailResult.ok,
+    emailMessage: emailResult.message || "",
+  };
+}
+
+function sendLeadAutoEmail_(lead) {
+  if (!lead.email) return { ok: false, message: "Lead email is missing." };
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty("RESEND_API_KEY");
+  const fromEmail = PropertiesService.getScriptProperties().getProperty("RESEND_FROM_EMAIL") || DEFAULT_RESEND_FROM_EMAIL;
+  if (!apiKey) {
+    return { ok: false, message: "Resend API key is not configured." };
+  }
+
+  const campaignResult = getCampaign_(lead.campaignId);
+  if (!campaignResult.ok || !campaignResult.campaign) {
+    return { ok: false, message: "Campaign not found for email." };
+  }
+
+  const campaign = campaignResult.campaign;
+  const subject = campaign.eventName || campaign.title || "Expo Lead Generator";
+  const plainBody = personalizeEmailBody_(campaign.emailBody || defaultLeadEmailBody_(), lead, campaign);
+  const htmlBody = buildLeadEmailHtml_(plainBody, campaign);
+  const payload = {
+    from: fromEmail,
+    to: [lead.email],
+    subject,
+    html: htmlBody,
+    text: plainBody,
+  };
+  if (campaign.ownerEmail) {
+    payload.reply_to = campaign.ownerEmail;
+  }
+
+  const response = UrlFetchApp.fetch("https://api.resend.com/emails", {
+    method: "post",
+    headers: {
+      Authorization: "Bearer " + apiKey,
+      "Content-Type": "application/json",
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    return { ok: false, message: response.getContentText() };
+  }
+  return { ok: true };
+}
+
+function defaultLeadEmailBody_() {
+  return "Hi {name},\n\nThank you for registering with {eventName}. We received your details and will follow up soon.";
+}
+
+function personalizeEmailBody_(body, lead, campaign) {
+  return String(body || "")
+    .replace(/\{name\}/gi, lead.customerName || "")
+    .replace(/\{email\}/gi, lead.email || "")
+    .replace(/\{phone\}/gi, lead.phone || "")
+    .replace(/\{eventName\}/gi, campaign.eventName || campaign.title || "")
+    .replace(/\{qrName\}/gi, campaign.title || "")
+    .replace(/\{badgeNumber\}/gi, lead.badgeNumber || "");
+}
+
+function buildLeadEmailHtml_(plainBody, campaign) {
+  const paragraphs = String(plainBody || "")
+    .split(/\n{2,}/)
+    .map((paragraph) => "<p>" + formatEmailText_(paragraph).replace(/\n/g, "<br>") + "</p>")
+    .join("");
+  const photo = campaign.emailPhotoDataUrl
+    ? '<p><img src="' + campaign.emailPhotoDataUrl + '" alt="" style="max-width:100%;border-radius:10px;display:block;margin:18px 0;" /></p>'
+    : "";
+  return '<div style="font-family:Arial,sans-serif;line-height:1.6;color:#142124;max-width:640px;margin:0 auto;">' + photo + paragraphs + "</div>";
+}
+
+function formatEmailText_(value) {
+  return escapeHtml_(value)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function escapeHtml_(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function adminUpdateAccount_(payload) {
@@ -558,13 +670,24 @@ function adminUpdateCampaign_(payload) {
     if (row[columns.id] === payload.campaignId) {
       sheet.getRange(index + 1, columns.ownerId + 1).setValue(payload.ownerId || "");
       sheet.getRange(index + 1, columns.ownerName + 1).setValue(payload.ownerName || "");
+      if (columns.ownerEmail >= 0) {
+        const ownerRecord = getAccountRecord_(payload.ownerId, "");
+        sheet.getRange(index + 1, columns.ownerEmail + 1).setValue(ownerRecord ? ownerRecord.email : payload.ownerEmail || "");
+      }
       sheet.getRange(index + 1, columns.type + 1).setValue(type);
       sheet.getRange(index + 1, columns.title + 1).setValue(payload.title || "");
       sheet.getRange(index + 1, columns.destinationUrl + 1).setValue(type === "presenter" ? payload.destinationUrl || "" : "");
       sheet.getRange(index + 1, columns.eventName + 1).setValue(payload.eventName || "");
+      if (columns.emailBody >= 0) {
+        sheet.getRange(index + 1, columns.emailBody + 1).setValue(payload.emailBody || "");
+      }
       if (payload.clearBanner || payload.hasBannerUpdate) {
         updateCampaignBannerCells_(sheet, index + 1, columns, payload);
         replaceCampaignBanner_(payload);
+      }
+      if (payload.clearEmailPhoto || payload.hasEmailPhotoUpdate) {
+        updateCampaignEmailPhotoCells_(sheet, index + 1, columns, payload);
+        replaceCampaignEmailPhoto_(payload);
       }
       return { ok: true };
     }
@@ -612,21 +735,58 @@ function replaceCampaignBanner_(payload) {
   }
 }
 
+function updateCampaignEmailPhotoCells_(sheet, rowNumber, columns, payload) {
+  const chunks = payload.hasEmailPhotoUpdate ? payload.emailPhotoChunks || [] : [];
+  if (columns.emailPhotoMime >= 0) {
+    sheet.getRange(rowNumber, columns.emailPhotoMime + 1).setValue(payload.hasEmailPhotoUpdate ? payload.emailPhotoMime || "image/jpeg" : "");
+  }
+  if (columns.emailPhotoChunkCount >= 0) {
+    sheet.getRange(rowNumber, columns.emailPhotoChunkCount + 1).setValue(chunks.length);
+  }
+}
+
+function replaceCampaignEmailPhoto_(payload) {
+  const sheet = getSheet_("CampaignEmailPhotos");
+  ensureCampaignEmailPhotoHeader_(sheet);
+  const values = sheet.getDataRange().getValues();
+  if (values.length > 1) {
+    const headers = values[0];
+    const columns = campaignEmailPhotoColumns_(headers);
+    for (let index = values.length - 1; index >= 1; index--) {
+      if (values[index][columns.campaignId] === payload.campaignId) {
+        sheet.deleteRow(index + 1);
+      }
+    }
+  }
+  if (payload.hasEmailPhotoUpdate) {
+    saveCampaignEmailPhoto_({
+      id: payload.campaignId,
+      emailPhotoMime: payload.emailPhotoMime || "image/jpeg",
+      emailPhotoChunks: payload.emailPhotoChunks || [],
+      createdAt: payload.updatedAt || new Date().toISOString(),
+    });
+  }
+}
+
 function saveCampaign_(payload) {
   const sheet = getSheet_("Campaigns");
   ensureCampaignHeader_(sheet);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const row = headers.map((header) => {
     if (header === "bannerDataUrl") return "";
+    if (header === "emailPhotoDataUrl") return "";
     if (header === "bannerChunkCount") return payload.bannerChunkCount || 0;
+    if (header === "emailPhotoChunkCount") return payload.emailPhotoChunkCount || 0;
     if (header.indexOf("bannerChunk") === 0) {
       const chunkNumber = Number(header.replace("bannerChunk", ""));
       return payload.bannerChunks && payload.bannerChunks[chunkNumber - 1] ? payload.bannerChunks[chunkNumber - 1] : "";
     }
+    if (header.indexOf("emailPhotoChunk") === 0) return "";
     return payload[header] || "";
   });
   sheet.appendRow(row);
   saveCampaignBanner_(payload);
+  saveCampaignEmailPhoto_(payload);
 }
 
 function saveCampaignBanner_(payload) {
@@ -647,6 +807,24 @@ function saveCampaignBanner_(payload) {
   });
 }
 
+function saveCampaignEmailPhoto_(payload) {
+  const sheet = getSheet_("CampaignEmailPhotos");
+  ensureCampaignEmailPhotoHeader_(sheet);
+  const chunks = payload.emailPhotoChunks || [];
+  if (!chunks.length) return;
+
+  chunks.forEach((chunk, index) => {
+    sheet.appendRow([
+      payload.id,
+      index + 1,
+      chunks.length,
+      payload.emailPhotoMime || "image/jpeg",
+      chunk,
+      payload.createdAt || new Date().toISOString(),
+    ]);
+  });
+}
+
 function getCampaign_(campaignId) {
   const sheet = getSheet_("Campaigns");
   ensureCampaignHeader_(sheet);
@@ -659,16 +837,23 @@ function getCampaign_(campaignId) {
     const row = values[index];
     if (row[columns.id] === campaignId) {
       const banner = getCampaignBanner_(campaignId) || rebuildLegacyBanner_(row, columns);
+      const emailPhoto = getCampaignEmailPhoto_(campaignId);
+      const ownerRecord = getAccountRecord_(row[columns.ownerId], "");
       return {
         ok: true,
         campaign: {
           id: row[columns.id],
           ownerId: row[columns.ownerId],
           ownerName: row[columns.ownerName],
+          ownerEmail: columns.ownerEmail >= 0 && row[columns.ownerEmail] ? row[columns.ownerEmail] : ownerRecord ? ownerRecord.email : "",
           type: row[columns.type],
           title: row[columns.title],
           destinationUrl: row[columns.destinationUrl],
           eventName: row[columns.eventName],
+          emailBody: columns.emailBody >= 0 ? row[columns.emailBody] : "",
+          emailPhotoDataUrl: emailPhoto.dataUrl,
+          emailPhotoMime: emailPhoto.mime,
+          emailPhotoChunkCount: emailPhoto.chunkCount,
           bannerDataUrl: banner.dataUrl,
           bannerMime: banner.mime,
           bannerChunkCount: banner.chunkCount,
@@ -708,6 +893,34 @@ function getCampaignBanner_(campaignId) {
     dataUrl,
     mime,
     chunkCount: chunkCount || chunks.length,
+  };
+}
+
+function getCampaignEmailPhoto_(campaignId) {
+  const sheet = getSheet_("CampaignEmailPhotos");
+  ensureCampaignEmailPhotoHeader_(sheet);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return { dataUrl: "", mime: "", chunkCount: 0 };
+
+  const headers = values[0];
+  const columns = campaignEmailPhotoColumns_(headers);
+  const chunks = [];
+  let mime = "";
+  let chunkCount = 0;
+
+  values.slice(1).forEach((row) => {
+    if (row[columns.campaignId] === campaignId) {
+      const chunkIndex = Number(row[columns.chunkIndex]);
+      chunks[chunkIndex - 1] = row[columns.chunkData] || "";
+      mime = row[columns.mime] || mime;
+      chunkCount = Number(row[columns.chunkCount] || chunkCount);
+    }
+  });
+
+  return {
+    dataUrl: chunks.filter(Boolean).join(""),
+    mime,
+    chunkCount: chunkCount || chunks.filter(Boolean).length,
   };
 }
 
@@ -996,10 +1209,14 @@ function ensureCampaignHeader_(sheet) {
     "id",
     "ownerId",
     "ownerName",
+    "ownerEmail",
     "type",
     "title",
     "destinationUrl",
     "eventName",
+    "emailBody",
+    "emailPhotoMime",
+    "emailPhotoChunkCount",
     "createdAt",
     "bannerMime",
     "bannerChunkCount",
@@ -1034,10 +1251,14 @@ function campaignColumns_(headers) {
     id: headers.indexOf("id"),
     ownerId: headers.indexOf("ownerId"),
     ownerName: headers.indexOf("ownerName"),
+    ownerEmail: headers.indexOf("ownerEmail"),
     type: headers.indexOf("type"),
     title: headers.indexOf("title"),
     destinationUrl: headers.indexOf("destinationUrl"),
     eventName: headers.indexOf("eventName"),
+    emailBody: headers.indexOf("emailBody"),
+    emailPhotoMime: headers.indexOf("emailPhotoMime"),
+    emailPhotoChunkCount: headers.indexOf("emailPhotoChunkCount"),
     createdAt: headers.indexOf("createdAt"),
     bannerMime: headers.indexOf("bannerMime"),
     bannerChunkCount: headers.indexOf("bannerChunkCount"),
@@ -1049,6 +1270,21 @@ function campaignColumns_(headers) {
 }
 
 function ensureCampaignBannerHeader_(sheet) {
+  const requiredHeaders = ["campaignId", "chunkIndex", "chunkCount", "mime", "chunkData", "createdAt"];
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  if (!headers[0]) {
+    sheet.getRange(1, 1, 1, requiredHeaders.length).setValues([requiredHeaders]);
+    return;
+  }
+  requiredHeaders.forEach((header) => {
+    if (headers.indexOf(header) === -1) {
+      sheet.getRange(1, sheet.getLastColumn() + 1).setValue(header);
+    }
+  });
+}
+
+function ensureCampaignEmailPhotoHeader_(sheet) {
   const requiredHeaders = ["campaignId", "chunkIndex", "chunkCount", "mime", "chunkData", "createdAt"];
   const lastColumn = Math.max(sheet.getLastColumn(), 1);
   const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
@@ -1130,14 +1366,26 @@ function campaignBannerColumns_(headers) {
   };
 }
 
+function campaignEmailPhotoColumns_(headers) {
+  return {
+    campaignId: headers.indexOf("campaignId"),
+    chunkIndex: headers.indexOf("chunkIndex"),
+    chunkCount: headers.indexOf("chunkCount"),
+    mime: headers.indexOf("mime"),
+    chunkData: headers.indexOf("chunkData"),
+    createdAt: headers.indexOf("createdAt"),
+  };
+}
+
 function getSheet_(name) {
   const spreadsheet = SpreadsheetApp.openById(SHEET_ID);
   let sheet = spreadsheet.getSheetByName(name);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(name);
     if (name === "Accounts") sheet.appendRow(["id", "role", "name", "email", "passwordHash", "createdAt", "passwordUpdatedAt", "adminTemporaryPassword"]);
-    if (name === "Campaigns") sheet.appendRow(["id", "ownerId", "ownerName", "type", "title", "destinationUrl", "eventName", "createdAt", "bannerMime", "bannerChunkCount", "bannerChunk1", "bannerChunk2", "bannerChunk3", "bannerChunk4", "bannerChunk5", "bannerChunk6", "bannerChunk7", "bannerChunk8", "bannerChunk9", "bannerChunk10", "bannerChunk11", "bannerChunk12"]);
+    if (name === "Campaigns") sheet.appendRow(["id", "ownerId", "ownerName", "ownerEmail", "type", "title", "destinationUrl", "eventName", "emailBody", "emailPhotoMime", "emailPhotoChunkCount", "createdAt", "bannerMime", "bannerChunkCount", "bannerChunk1", "bannerChunk2", "bannerChunk3", "bannerChunk4", "bannerChunk5", "bannerChunk6", "bannerChunk7", "bannerChunk8", "bannerChunk9", "bannerChunk10", "bannerChunk11", "bannerChunk12"]);
     if (name === "CampaignBanners") sheet.appendRow(["campaignId", "chunkIndex", "chunkCount", "mime", "chunkData", "createdAt"]);
+    if (name === "CampaignEmailPhotos") sheet.appendRow(["campaignId", "chunkIndex", "chunkCount", "mime", "chunkData", "createdAt"]);
     if (name === "Leads") sheet.appendRow(["id", "campaignId", "campaignTitle", "ownerId", "customerName", "phone", "email", "salesPerson", "notes", "badgeNumber", "createdAt"]);
     if (name === "Subscriptions") sheet.appendRow(["userId", "email", "role", "status", "amountCents", "currency", "trialDays", "stripeCheckoutSessionId", "stripeCheckoutUrl", "createdAt"]);
     if (name === "ChatMessages") sheet.appendRow(["id", "conversationUserId", "conversationUserName", "conversationUserEmail", "senderId", "senderName", "senderEmail", "senderRole", "message", "createdAt"]);

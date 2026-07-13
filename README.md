@@ -7,16 +7,19 @@ A static lead-capture website for exhibitors and expo organisers.
 - Creates Exhibitor and Expo Organiser accounts.
 - Generates QR codes for campaigns.
 - Allows each QR campaign to save a scan-preview banner for the event or booth.
-- Exhibitor QR flow collects customer name, phone, email, requested sales person, and notes before opening the exhibitor link.
-- Organiser QR flow collects customer name, phone, email, requested sales person, and notes, then displays a badge number.
+- Exhibitor QR flow collects customer name, phone, and email before opening the exhibitor link.
+- Organiser QR flow collects customer name, phone, and email, then displays a badge number.
 - Organiser dashboard verifies badge numbers and exports captured leads as CSV.
 - Admin accounts can view all exhibitor and expo organiser records and download CSV data per event.
 - The Account tab shows event QR codes created by the signed-in user; admin accounts see all event QR codes.
 - Saves accounts, QR campaigns, and leads locally first, with Google Sheets sync through the built-in Apps Script web app.
 - Includes a local QRCode generator script, so QR generation works without relying on a CDN.
 - Creates Stripe Checkout subscription sessions for $7.99/month with remaining trial days calculated from the account `createdAt` date stored in Google Sheets.
+- Sends an automatic customer email after the Scan Preview form is submitted when Resend is configured in Apps Script.
 
 Campaign banners are resized in the browser and stored in the `CampaignBanners` sheet as chunked rows keyed by campaign ID, keeping each chunk below Google Sheets' 50,000-character cell limit.
+
+Auto-email photos are resized in the browser and stored in the `CampaignEmailPhotos` sheet as chunked rows keyed by campaign ID.
 
 ## Admin Accounts
 
@@ -70,6 +73,16 @@ Do not paste the Stripe secret key into the website files. In Apps Script:
 The browser calls Apps Script to create Stripe Checkout sessions. Subscription checkout attempts are logged in the `Subscriptions` sheet.
 
 To switch payments to a different Stripe account, replace the `STRIPE_SECRET_KEY` Script Property with the new Stripe live secret key, then redeploy the Apps Script web app. The Stripe publishable key is not used by this static checkout flow because Checkout sessions are created server-side by Apps Script.
+
+## Resend Email Setup
+
+Do not paste the Resend API key into the website files. In Apps Script, add this Script Property:
+
+- `RESEND_API_KEY`: your Resend API key.
+
+The default sender is `noreply@expoleadgenerator.com`. You can optionally add `RESEND_FROM_EMAIL` to override it. The event owner's email is used as `reply_to` so replies go back to the user who created the QR. Resend requires the actual `from` address/domain to be verified.
+
+After adding the properties, run `authorizeExpoLeadGeneratorServices` once and redeploy the Apps Script web app.
 
 ## Run
 

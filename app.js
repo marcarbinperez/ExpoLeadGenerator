@@ -2,6 +2,8 @@ const SHEET_URL = "https://docs.google.com/spreadsheets/d/1yUfreitpLB9QSbUnygiqA
 const DEFAULT_SCRIPT_ENDPOINT = "https://script.google.com/macros/s/AKfycbznl7KQLWVlJjrtoeBzY3ILIRc2xvz4VE0v6Uhbp3FeapRmw5YDtjBoBpUl_NEaqSLv/exec";
 const BANNER_CHUNK_SIZE = 45000;
 const MAX_BANNER_CHUNKS = 12;
+const EMAIL_PHOTO_CHUNK_SIZE = 45000;
+const MAX_EMAIL_PHOTO_CHUNKS = 12;
 const SUBSCRIPTION_PRICE_CENTS = 799;
 const TRIAL_DAYS = 15;
 const STORE_KEYS = {
@@ -202,6 +204,33 @@ async function prepareBanner(file) {
     bannerMime: "image/jpeg",
     bannerChunkCount: bannerChunks.length,
     bannerChunks,
+  };
+}
+
+async function prepareEmailPhoto(file) {
+  if (!file) return null;
+  const dataUrl = await readImageFile(file);
+  const image = await loadImage(dataUrl);
+  const maxWidth = 980;
+  const maxHeight = 980;
+  const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, width, height);
+  const dataUrlOut = canvas.toDataURL("image/jpeg", 0.78);
+  const chunks = chunkText(dataUrlOut, EMAIL_PHOTO_CHUNK_SIZE);
+  if (chunks.length > MAX_EMAIL_PHOTO_CHUNKS) {
+    throw new Error("Email photo is too large. Please choose a smaller image.");
+  }
+  return {
+    emailPhotoDataUrl: dataUrlOut,
+    emailPhotoMime: "image/jpeg",
+    emailPhotoChunkCount: chunks.length,
+    emailPhotoChunks: chunks,
   };
 }
 
@@ -415,7 +444,7 @@ function leadMatchesSearch(lead, campaign, query) {
 
 function saveLocalCampaign(campaign) {
   if (!campaign?.id) return null;
-  const { bannerChunks, ...campaignForStorage } = campaign;
+  const { bannerChunks, emailPhotoChunks, emailPhotoDataUrl, ...campaignForStorage } = campaign;
   const campaigns = readStore(STORE_KEYS.campaigns, []);
   const existingIndex = campaigns.findIndex((item) => item.id === campaignForStorage.id);
   if (existingIndex >= 0) {
@@ -554,6 +583,24 @@ function latestMessageAt(messages) {
   }, "");
 }
 
+function isUnsupportedAction(result) {
+  return String(result?.message || "").toLowerCase() === "unsupported action.";
+}
+
+function conversationsFromAccounts(accounts) {
+  return (accounts || [])
+    .filter((account) => account.role !== "admin")
+    .map((account) => ({
+      userId: account.id,
+      userName: account.name,
+      userEmail: account.email,
+      latestMessageAt: "",
+      latestSenderId: "",
+      latestMessage: "",
+    }))
+    .sort((a, b) => String(a.userName || a.userEmail || "").localeCompare(String(b.userName || b.userEmail || "")));
+}
+
 function updateChatVisibility() {
   const widget = $("#chatWidget");
   if (!widget) return;
@@ -620,7 +667,7 @@ function renderChatMessages() {
     const sender = mine ? "You" : message.senderName || (message.senderRole === "admin" ? "Admin" : "User");
     return `
       <div class="chat-message ${mine ? "mine" : ""}">
-        <small>${escapeHtml(sender)}${time ? ` · ${escapeHtml(time)}` : ""}</small>
+        <small>${escapeHtml(sender)}${time ? ` - ${escapeHtml(time)}` : ""}</small>
         <p>${escapeHtml(message.message)}</p>
       </div>
     `;
@@ -662,6 +709,10 @@ async function refreshChat(options = {}) {
       if (conversations.ok) {
         state.chat.conversations = conversations.conversations || [];
         renderChatConversations();
+      } else if (isUnsupportedAction(conversations)) {
+        if (!adminAccounts().length) await loadAdminData();
+        state.chat.conversations = conversationsFromAccounts(adminAccounts());
+        renderChatConversations();
       }
     }
 
@@ -678,6 +729,14 @@ async function refreshChat(options = {}) {
       email: state.user.email,
       targetUserId,
     });
+    if (isUnsupportedAction(result)) {
+      renderChatMessages();
+      updateChatBadge();
+      if (state.chat.open) {
+        toast("Chat needs the updated Apps Script deployment before messages can sync.");
+      }
+      return;
+    }
     if (result.ok) {
       state.chat.messages = result.messages || [];
       if (options.markRead || state.chat.open) {
@@ -784,8 +843,11 @@ function fillAdminEventForm(campaignId) {
   form.title.value = campaign?.title || "";
   form.eventName.value = campaign?.eventName || "";
   form.destinationUrl.value = campaign?.destinationUrl || "";
+  form.emailBody.value = campaign?.emailBody || "";
   form.banner.value = "";
+  form.emailPhoto.value = "";
   form.clearBanner.checked = false;
+  form.clearEmailPhoto.checked = false;
   $("#adminBannerPreview").classList.add("hidden");
   $("#adminBannerPreview").style.backgroundImage = "";
 }
@@ -904,7 +966,7 @@ function renderLeads() {
   tbody.innerHTML = "";
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="8">${query ? "No leads match your search." : "No leads captured yet."}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6">${query ? "No leads match your search." : "No leads captured yet."}</td></tr>`;
     updateLeadPagination(0, 1);
     return;
   }
@@ -916,8 +978,6 @@ function renderLeads() {
       <td>${escapeHtml(lead.customerName)}</td>
       <td>${escapeHtml(lead.phone)}</td>
       <td>${escapeHtml(lead.email)}</td>
-      <td>${escapeHtml(lead.salesPerson || "")}</td>
-      <td>${escapeHtml(lead.notes || "")}</td>
       <td>${escapeHtml(campaign?.title || "Unknown")}</td>
       <td>${escapeHtml(lead.badgeNumber || "")}</td>
       <td>${new Date(lead.createdAt).toLocaleString()}</td>
@@ -963,7 +1023,7 @@ function renderAdminLeads() {
   tbody.innerHTML = "";
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="10">${query ? "No records match your search." : "No records found for this event."}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8">${query ? "No records match your search." : "No records found for this event."}</td></tr>`;
     updateAdminPagination(0, 1);
     return;
   }
@@ -978,8 +1038,6 @@ function renderAdminLeads() {
       <td>${escapeHtml(lead.customerName)}</td>
       <td>${escapeHtml(lead.phone)}</td>
       <td>${escapeHtml(lead.email)}</td>
-      <td>${escapeHtml(lead.salesPerson || "")}</td>
-      <td>${escapeHtml(lead.notes || "")}</td>
       <td>${escapeHtml(lead.badgeNumber || "")}</td>
       <td>${lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ""}</td>
     `;
@@ -1123,10 +1181,12 @@ async function saveAdminEvent(form) {
   }
 
   let banner = null;
+  let emailPhoto = null;
   try {
     banner = await prepareBanner(form.elements.banner.files?.[0]);
+    emailPhoto = await prepareEmailPhoto(form.elements.emailPhoto.files?.[0]);
   } catch (error) {
-    toast(error.message || "Banner image could not be prepared.");
+    toast(error.message || "Image could not be prepared.");
     return;
   }
 
@@ -1140,11 +1200,17 @@ async function saveAdminEvent(form) {
     title: data.title.trim(),
     eventName: data.eventName.trim(),
     destinationUrl,
+    emailBody: data.emailBody.trim(),
     clearBanner: Boolean(data.clearBanner),
+    clearEmailPhoto: Boolean(data.clearEmailPhoto),
     hasBannerUpdate: Boolean(banner),
     bannerMime: banner?.bannerMime || "",
     bannerChunkCount: banner?.bannerChunkCount || 0,
     bannerChunks: banner?.bannerChunks || [],
+    hasEmailPhotoUpdate: Boolean(emailPhoto),
+    emailPhotoMime: emailPhoto?.emailPhotoMime || "",
+    emailPhotoChunkCount: emailPhoto?.emailPhotoChunkCount || 0,
+    emailPhotoChunks: emailPhoto?.emailPhotoChunks || [],
     updatedAt: new Date().toISOString(),
   });
 
@@ -1155,7 +1221,9 @@ async function saveAdminEvent(form) {
 
   await loadAdminData();
   form.banner.value = "";
+  form.emailPhoto.value = "";
   form.clearBanner.checked = false;
+  form.clearEmailPhoto.checked = false;
   $("#adminBannerPreview").classList.add("hidden");
   $("#adminBannerPreview").style.backgroundImage = "";
   toast("Event updated.");
@@ -1266,15 +1334,13 @@ async function openCapture(campaignId) {
 }
 
 function csvDownload(rows, campaignId = "all") {
-  const headers = ["Name", "Phone", "Email", "Sales Person", "Notes", "Campaign", "Badge", "Created At"];
+  const headers = ["Name", "Phone", "Email", "Campaign", "Badge", "Created At"];
   const campaigns = new Map(readStore(STORE_KEYS.campaigns, []).map((campaign) => [campaign.id, campaign]));
   const filteredRows = campaignId === "all" ? rows : rows.filter((lead) => lead.campaignId === campaignId);
   const body = filteredRows.map((lead) => [
     lead.customerName,
     lead.phone,
     lead.email,
-    lead.salesPerson || "",
-    lead.notes || "",
     campaigns.get(lead.campaignId)?.title || "",
     lead.badgeNumber || "",
     lead.createdAt,
@@ -1301,7 +1367,7 @@ function adminCsvDownload() {
     return;
   }
 
-  const headers = ["Owner", "Account Type", "Event", "Campaign", "Name", "Phone", "Email", "Sales Person", "Notes", "Badge", "Created At"];
+  const headers = ["Owner", "Account Type", "Event", "Campaign", "Name", "Phone", "Email", "Badge", "Created At"];
   const body = rows.map((lead) => {
     const campaign = campaigns.get(lead.campaignId);
     return [
@@ -1312,8 +1378,6 @@ function adminCsvDownload() {
       lead.customerName,
       lead.phone,
       lead.email,
-      lead.salesPerson || "",
-      lead.notes || "",
       lead.badgeNumber || "",
       lead.createdAt,
     ];
@@ -1447,7 +1511,7 @@ $("#chatForm").addEventListener("submit", async (event) => {
   if (!message) return;
   const result = await sendChatMessage(message);
   if (!result.ok) {
-    toast(result.message || "Message could not be sent.");
+    toast(isUnsupportedAction(result) ? "Chat needs the updated Apps Script deployment before messages can sync." : result.message || "Message could not be sent.");
     return;
   }
   input.value = "";
@@ -1574,10 +1638,12 @@ $("#campaignForm").addEventListener("submit", async (event) => {
   }
 
   let banner = null;
+  let emailPhoto = null;
   try {
     banner = await prepareBanner(form.elements.banner.files?.[0]);
+    emailPhoto = await prepareEmailPhoto(form.elements.emailPhoto.files?.[0]);
   } catch (error) {
-    toast(error.message || "Banner image could not be prepared.");
+    toast(error.message || "Image could not be prepared.");
     return;
   }
 
@@ -1585,14 +1651,20 @@ $("#campaignForm").addEventListener("submit", async (event) => {
     id: uid("qr"),
     ownerId: state.user.id,
     ownerName: state.user.name,
+    ownerEmail: state.user.email,
     type: state.user.role,
     title: data.title.trim(),
     destinationUrl,
     eventName: data.eventName.trim(),
+    emailBody: data.emailBody.trim(),
     bannerDataUrl: banner?.bannerDataUrl || "",
     bannerMime: banner?.bannerMime || "",
     bannerChunkCount: banner?.bannerChunkCount || 0,
     bannerChunks: banner?.bannerChunks || [],
+    emailPhotoDataUrl: emailPhoto?.emailPhotoDataUrl || "",
+    emailPhotoMime: emailPhoto?.emailPhotoMime || "",
+    emailPhotoChunkCount: emailPhoto?.emailPhotoChunkCount || 0,
+    emailPhotoChunks: emailPhoto?.emailPhotoChunks || [],
     createdAt: new Date().toISOString(),
   };
   form.reset();
@@ -1635,8 +1707,8 @@ $("#leadForm").addEventListener("submit", async (event) => {
     customerName: data.customerName.trim(),
     phone: data.phone.trim(),
     email: data.email.trim().toLowerCase(),
-    salesPerson: data.salesPerson.trim(),
-    notes: data.notes.trim(),
+    salesPerson: "",
+    notes: "",
     badgeNumber,
     createdAt: new Date().toISOString(),
   };

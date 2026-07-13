@@ -233,6 +233,14 @@
                 <input name="banner" type="file" accept="image/*" />
               </label>
               <div class="banner-preview hidden" id="bannerPreview" aria-label="Selected banner preview"></div>
+              <label>
+                Auto Email Body
+                <textarea name="emailBody" placeholder="Write the email customers receive after submitting the scan form. Use line breaks for formatting."></textarea>
+              </label>
+              <label>
+                Auto Email Photo
+                <input name="emailPhoto" type="file" accept="image/*" />
+              </label>
               <button class="primary-button" type="submit">Generate QR</button>
             </form>
 
@@ -280,8 +288,6 @@
                     <th>Name</th>
                     <th>Phone</th>
                     <th>Email</th>
-                    <th>Sales Person</th>
-                    <th>Notes</th>
                     <th>Campaign</th>
                     <th>Badge</th>
                     <th>Date</th>
@@ -320,14 +326,6 @@
             <label>
               Email
               <input name="email" type="email" autocomplete="email" required />
-            </label>
-            <label>
-              Sales person you want to meet
-              <input name="salesPerson" autocomplete="off" />
-            </label>
-            <label>
-              Notes
-              <textarea name="notes" rows="4" placeholder="Add any request, interest, or follow-up details"></textarea>
             </label>
             <button class="primary-button" type="submit">Submit</button>
           </form>
@@ -429,6 +427,18 @@
                 <input name="banner" type="file" accept="image/*" />
               </label>
               <div class="banner-preview hidden" id="adminBannerPreview" aria-label="Selected admin banner preview"></div>
+              <label>
+                Auto Email Body
+                <textarea name="emailBody" placeholder="Email body sent after scan form submission"></textarea>
+              </label>
+              <label>
+                Auto Email Photo
+                <input name="emailPhoto" type="file" accept="image/*" />
+              </label>
+              <label class="checkbox-field">
+                <input name="clearEmailPhoto" type="checkbox" />
+                Clear current email photo
+              </label>
               <label class="checkbox-field">
                 <input name="clearBanner" type="checkbox" />
                 Clear current banner
@@ -458,8 +468,6 @@
                     <th>Name</th>
                     <th>Phone</th>
                     <th>Email</th>
-                    <th>Sales Person</th>
-                    <th>Notes</th>
                     <th>Badge</th>
                     <th>Date</th>
                   </tr>
